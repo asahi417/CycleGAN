@@ -20,22 +20,26 @@ class CycleGAN:
                  image_shape: list,
                  cyclic_lambda_a: float,
                  cyclic_lambda_b: float,
+                 identity_lambda: float,
                  learning_rate: float=None,
                  buffer_size: int = 50,
                  batch: int = 10,
                  optimizer: str = 'sgd',
                  debug: bool = True,
                  n_thread: int = 4,
+                 log_img_size: int = 5
                  ):
 
         self.__ini_learning_rate = learning_rate
         self.__checkpoint_dir = checkpoint_dir
         self.__checkpoint = '%s/model.ckpt' % checkpoint_dir
-
+        self.__log_img_size = log_img_size
+        self.__identity_lambda = identity_lambda
         self.__buffer_size = buffer_size
         self.__image_shape = image_shape
         self.__cyclic_lambda_a = cyclic_lambda_a
         self.__cyclic_lambda_b = cyclic_lambda_b
+
         self.__base_batch = batch
         self.__optimizer = optimizer
         self.__logger = create_log('%s/log' % checkpoint_dir) if debug else None
@@ -57,12 +61,13 @@ class CycleGAN:
             self.session.run(tf.global_variables_initializer())
             self.__warm_start = False
 
-    def __tfreocrd(self, record_name, batch):
+    def __tfreocrd(self, record_name, batch, seed=None):
+        seed = tf.cast(seed, tf.int64) if seed is not None else seed
         data_set_api = tf.data.TFRecordDataset(record_name, compression_type='GZIP')
         # convert record to tensor
         data_set_api = data_set_api.map(tfrecord_parser(self.__image_shape), self.__n_thread)
         # set batch size
-        data_set_api = data_set_api.shuffle(buffer_size=10000)
+        data_set_api = data_set_api.shuffle(buffer_size=10000, seed=seed)
         data_set_api = data_set_api.batch(tf.cast(batch, tf.int64))
         # make iterator
         iterator = tf.data.Iterator.from_structure(data_set_api.output_types, data_set_api.output_shapes)
@@ -71,115 +76,121 @@ class CycleGAN:
 
     def __build_network(self):
 
-        with tf.name_scope('placeholders'):
-            self.__tfrecord_a = tf.placeholder(tf.string, name='tfrecord_a')
-            self.__tfrecord_b = tf.placeholder(tf.string, name='tfrecord_b')
-            self.__batch = tf.placeholder_with_default(self.__base_batch, [], name='batch')
-            self.__learning_rate = tf.placeholder_with_default(0.0, [], name='learning_rate')
-            # will sampled from buffered generated images
-            self.__fake_img_a_buffer = tf.placeholder(tf.float32,
-                                                      [self.__base_batch] + self.__image_shape,
-                                                      name='fake_image')
-            self.__fake_img_b_buffer = tf.placeholder(tf.float32,
-                                                      [self.__base_batch] + self.__image_shape,
-                                                      name='fake_image')
+        ##########
+        # config #
+        ##########
+        self.__tfrecord_a = tf.placeholder(tf.string, name='tfrecord_a')
+        self.__tfrecord_b = tf.placeholder(tf.string, name='tfrecord_b')
+        self.__batch = tf.placeholder_with_default(self.__base_batch, [], name='batch')
 
-        # tfrecord instance for training generators
-        iterator_gen_a, self.iterator_gen_ini_a = self.__tfreocrd(self.__tfrecord_a, self.__batch)
-        iterator_gen_b, self.iterator_gen_ini_b = self.__tfreocrd(self.__tfrecord_b, self.__batch)
+        #########
+        # input #
+        #########
+        img_iterator_a, self.iterator_ini_a = self.__tfreocrd(self.__tfrecord_a, self.__batch)
+        img_iterator_b, self.iterator_ini_b = self.__tfreocrd(self.__tfrecord_b, self.__batch)
+        self.img_a = img_iterator_a.get_next()
+        self.img_b = img_iterator_b.get_next()
 
-        # tfrecord instance for training discriminators
-        iterator_disc_a, self.iterator_disc_ini_a = self.__tfreocrd(self.__tfrecord_a, self.__batch)
-        iterator_disc_b, self.iterator_disc_ini_b = self.__tfreocrd(self.__tfrecord_b, self.__batch)
+        ###############
+        # placeholder #
+        ###############
+        img_shape = [None] + self.__image_shape
+        # original images from domain A and B
+        self.__original_img_a = tf.placeholder(tf.float32, img_shape, name='original_img_a')
+        self.__original_img_b = tf.placeholder(tf.float32, img_shape, name='original_img_b')
 
-        with tf.name_scope('model'):
-            # generator
-            with tf.name_scope('generators'):
-                original_img_a = iterator_gen_a.get_next()
-                original_img_a_norm = (original_img_a/255 - 0.5) * 2
-                self.fake_img_b = generator_resnet(original_img_a_norm, scope='generator_from_a')
-                cycle_img_a = generator_resnet(self.fake_img_b, scope='generator_from_b')
+        # will sampled from buffered generated images
+        self.__fake_img_a_buffer = tf.placeholder(tf.float32, img_shape, name='fake_img_a_buffer')
+        self.__fake_img_b_buffer = tf.placeholder(tf.float32, img_shape, name='fake_img_b_buffer')
 
-                original_img_b = iterator_gen_b.get_next()
-                original_img_b_norm = (original_img_b / 255 - 0.5) * 2
-                self.fake_img_a = generator_resnet(original_img_b_norm, scope='generator_from_b', reuse=True)
-                cycle_img_b = generator_resnet(self.fake_img_a, scope='generator_from_a', reuse=True)
+        self.__learning_rate = tf.placeholder_with_default(0.0, [], name='learning_rate')
 
-            # discriminator (batch size would be varying due to random cropping)
-            with tf.name_scope('discriminators'):
+        original_img_a_norm = (self.__original_img_a / 255 - 0.5) * 2
+        original_img_b_norm = (self.__original_img_b / 255 - 0.5) * 2
 
-                # logit for update generator A
-                logit_fake_a_generator = discriminator_patch(self.fake_img_a, scope='discriminator_a')
-                prob_fake_a_generator = tf.nn.softmax(logit_fake_a_generator)
+        #############
+        # generator #
+        #############
+        with tf.name_scope('generators'):
+            # generator from A to B
+            self.fake_img_b = generator_resnet(original_img_a_norm, scope='generator_a')
+            cycle_img_a = generator_resnet(self.fake_img_b, scope='generator_b')
 
-                # logit for update generator B
-                logit_fake_b_generator = discriminator_patch(self.fake_img_b, scope='discriminator_b')
-                prob_fake_b_generator = tf.nn.softmax(logit_fake_b_generator)
+            # generator from B to A
+            self.fake_img_a = generator_resnet(original_img_b_norm, scope='generator_b', reuse=True)
+            cycle_img_b = generator_resnet(self.fake_img_a, scope='generator_a', reuse=True)
 
-                # logit for update discriminator A
-                original_img_disc_a = iterator_disc_a.get_next()
-                original_img_disc_a_norm = (original_img_disc_a/255 - 0.5) * 2
-                logit_fake_a = discriminator_patch(self.__fake_img_a_buffer, scope='discriminator_a', reuse=True)
-                prob_fake_a = tf.nn.softmax(logit_fake_a)
-                logit_original_a = discriminator_patch(original_img_disc_a_norm, scope='discriminator_a', reuse=True)
-                prob_original_a = tf.nn.softmax(logit_original_a)
+            if self.__identity_lambda != 0.0:
+                id_a = generator_resnet(original_img_a_norm, scope='generator_b', reuse=True)
+                id_loss_a = tf.reduce_mean(tf.abs(original_img_a_norm - id_a))
 
-                # logit for update discriminator B
-                original_img_disc_b = iterator_disc_b.get_next()
-                original_img_disc_b_norm = (original_img_disc_b / 255 - 0.5) * 2
-                logit_fake_b = discriminator_patch(self.__fake_img_b_buffer, scope='discriminator_b', reuse=True)
-                prob_fake_b = tf.nn.softmax(logit_fake_b)
-                logit_original_b = discriminator_patch(original_img_disc_b_norm, scope='discriminator_b', reuse=True)
-                prob_original_b = tf.nn.softmax(logit_original_b)
+                id_b = generator_resnet(original_img_b_norm, scope='generator_a', reuse=True)
+                id_loss_b = tf.reduce_mean(tf.abs(original_img_b_norm - id_b))
+            else:
+                id_loss_a = id_loss_b = 0.0
 
-        # loss
-        with tf.name_scope('loss'):
-            # adversarial loss (least square loss, known as LSGAN)
-            self.gen_loss_a = tf.reduce_mean(tf.squared_difference(prob_fake_a_generator, 1)) * 0.5
-            self.gen_loss_b = tf.reduce_mean(tf.squared_difference(prob_fake_b_generator, 1)) * 0.5
+        #################
+        # discriminator #
+        #################
+        with tf.name_scope('discriminators'):
+            # logit for update generator A
+            logit_fake_a_generator = discriminator_patch(self.fake_img_a, scope='discriminator_a')
+            # logit for update generator B
+            logit_fake_b_generator = discriminator_patch(self.fake_img_b, scope='discriminator_b')
 
-            self.disc_loss_a = (tf.reduce_mean(tf.squared_difference(prob_fake_a, 0)) +
-                                tf.reduce_mean(tf.squared_difference(prob_original_a, 1))) * 0.5
-            self.disc_loss_b = (tf.reduce_mean(tf.squared_difference(prob_fake_b, 0)) +
-                                tf.reduce_mean(tf.squared_difference(prob_original_b, 1))) * 0.5
+            # logit for update discriminator A
+            logit_fake_a = discriminator_patch(self.__fake_img_a_buffer, scope='discriminator_a', reuse=True)
+            logit_original_a = discriminator_patch(original_img_a_norm, scope='discriminator_a', reuse=True)
 
+            # logit for update discriminator B
+            logit_fake_b = discriminator_patch(self.__fake_img_b_buffer, scope='discriminator_b', reuse=True)
+            logit_original_b = discriminator_patch(original_img_b_norm, scope='discriminator_b', reuse=True)
+
+        ########
+        # loss #
+        ########
+        with tf.name_scope('loss'):  # adversarial loss (least square loss, known as LSGAN)
+            gen_loss_a = tf.reduce_mean(tf.squared_difference(logit_fake_a_generator, 1))
+            gen_loss_b = tf.reduce_mean(tf.squared_difference(logit_fake_b_generator, 1))
+
+            disc_loss_a = (tf.reduce_mean(tf.squared_difference(logit_fake_a, 0)) +
+                           tf.reduce_mean(tf.squared_difference(logit_original_a, 1))) * 0.5
+            disc_loss_b = (tf.reduce_mean(tf.squared_difference(logit_fake_b, 0)) +
+                           tf.reduce_mean(tf.squared_difference(logit_original_b, 1))) * 0.5
             # cycle consistency loss
-            self.cycle_loss_a = tf.reduce_mean(tf.abs(original_img_a - cycle_img_a))
-            self.cycle_loss_b = tf.reduce_mean(tf.abs(original_img_b - cycle_img_b))
+            cycle_loss_a = tf.reduce_mean(tf.abs(original_img_a_norm - cycle_img_a))
+            cycle_loss_b = tf.reduce_mean(tf.abs(original_img_b_norm - cycle_img_b))
 
+        ################
+        # optimization #
+        ################
         with tf.name_scope('optimization'):
-            # optimizer
-            if self.__optimizer == 'sgd':
-                optimizer = tf.train.GradientDescentOptimizer(self.__learning_rate)
-            elif self.__optimizer == 'adam':
-                optimizer = tf.train.AdamOptimizer(self.__learning_rate, beta1=0.5)
-            elif self.__optimizer == 'rmsprop':
-                optimizer = tf.train.RMSPropOptimizer(self.__learning_rate)
+            if self.__optimizer == 'adam':
+                optimizer_g_a = tf.train.AdamOptimizer(self.__learning_rate)
+                optimizer_g_b = tf.train.AdamOptimizer(self.__learning_rate)
+                optimizer_d_a = tf.train.AdamOptimizer(self.__learning_rate)
+                optimizer_d_b = tf.train.AdamOptimizer(self.__learning_rate)
             else:
                 raise ValueError('unknown optimizer !!')
 
-            var_gen_a = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator_from_a')
-            var_gen_b = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator_from_b')
-            self.train_op_gen_a = optimizer.minimize(self.gen_loss_a + self.cycle_loss_a * self.__cyclic_lambda_a,
-                                                     var_list=var_gen_a)
-            self.train_op_gen_b = optimizer.minimize(self.gen_loss_b + self.cycle_loss_b * self.__cyclic_lambda_b,
-                                                     var_list=var_gen_b)
-
+            var_gen_a = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator_a')
+            var_gen_b = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator_b')
             var_disc_a = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator_a')
             var_disc_b = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator_b')
-            self.train_op_disc_a = optimizer.minimize(self.disc_loss_a, var_list=var_disc_a)
-            self.train_op_disc_b = optimizer.minimize(self.disc_loss_b, var_list=var_disc_b)
 
-            # grad_gen_a = tf.gradients(self.gen_loss_a + self.cycle_loss_a * self.__cyclic_lambda_a, var_gen_a)
-            # grad_gen_b = tf.gradients(self.gen_loss_b + self.cycle_loss_b * self.__cyclic_lambda_b, var_gen_b)
-            # grad_disc_a = tf.gradients(self.disc_loss_a, var_disc_a)
-            # grad_disc_b = tf.gradients(self.disc_loss_b, var_disc_b)
-            # with tf.control_dependencies(grad_gen_a+grad_gen_b):
-            #     self.train_op_gen_b = optimizer.apply_gradients(zip(grad_gen_b, var_gen_b))
-            #     self.train_op_gen_a = optimizer.apply_gradients(zip(grad_gen_a, var_gen_a))
-            # with tf.control_dependencies(grad_disc_a+grad_disc_b):
-            #     self.train_op_disc_a = optimizer.apply_gradients(zip(grad_disc_a, var_disc_a))
-            #     self.train_op_disc_b = optimizer.apply_gradients(zip(grad_disc_b, var_disc_b))
+            cycle_loss = cycle_loss_a * self.__cyclic_lambda_a + cycle_loss_b * self.__cyclic_lambda_b
+            self.train_op_gen_a = optimizer_g_a.minimize(
+                gen_loss_b + cycle_loss + id_loss_b * self.__cyclic_lambda_a * self.__identity_lambda,
+                var_list=var_gen_a)
+            self.train_op_gen_b = optimizer_g_b.minimize(
+                gen_loss_a + cycle_loss + id_loss_a * self.__cyclic_lambda_b * self.__identity_lambda,
+                var_list=var_gen_b)
+            self.train_op_disc_a = optimizer_d_a.minimize(
+                disc_loss_a,
+                var_list=var_disc_a)
+            self.train_op_disc_b = optimizer_d_b.minimize(
+                disc_loss_b,
+                var_list=var_disc_b)
 
         # logging
         n_var = 0
@@ -195,6 +206,11 @@ class CycleGAN:
         ##################
         # scalar summary #
         ##################
+
+        def image_form(float_img):
+            img_int = tf.floor((float_img + 1) * 255 / 2)
+            return tf.cast(img_int, tf.uint8)
+
         self.summary_hyperparameter = tf.summary.merge([
             tf.summary.scalar('hyperparameter_cyclic_lambda_a', self.__cyclic_lambda_a),
             tf.summary.scalar('hyperparameter_cyclic_lambda_b', self.__cyclic_lambda_b),
@@ -202,43 +218,42 @@ class CycleGAN:
             tf.summary.scalar('hyperparameter_image_shape_h', self.__image_shape[1]),
             tf.summary.scalar('hyperparameter_image_shape_c', self.__image_shape[2]),
             tf.summary.scalar('hyperparameter_buffer_size', self.__buffer_size),
-            tf.summary.scalar('hyperparameter_batch', self.__batch)
+            tf.summary.scalar('hyperparameter_batch', self.__base_batch)
         ])
 
-        self.summary_train_gen = tf.summary.merge([
+        self.summary_train_gen_a = tf.summary.merge([
             tf.summary.scalar('meta_learning_rate', self.__learning_rate),
-            tf.summary.scalar('train_gen_loss_a', self.gen_loss_a),
-            tf.summary.scalar('train_gen_loss_b', self.gen_loss_b),
-            tf.summary.scalar('train_cycle_loss_a', self.cycle_loss_a),
-            tf.summary.scalar('train_cycle_loss_b', self.cycle_loss_b)
+            tf.summary.scalar('loss_gen_a', gen_loss_a),
+            tf.summary.scalar('loss_cycle_a', cycle_loss_a),
+            tf.summary.scalar('loss_id_a', id_loss_b)
         ])
 
-        self.summary_train_disc = tf.summary.merge([
-            tf.summary.scalar('train_disc_loss_a', self.disc_loss_a),
-            tf.summary.scalar('train_disc_loss_b', self.disc_loss_b)
+        self.summary_train_gen_b = tf.summary.merge([
+            tf.summary.scalar('loss_gen_b', gen_loss_b),
+            tf.summary.scalar('loss_cycle_b', cycle_loss_b),
+            tf.summary.scalar('loss_id_b', id_loss_a)
         ])
 
-        self.summary_valid = tf.summary.merge([
-            tf.summary.scalar('valid_gen_loss_a', self.gen_loss_a),
-            tf.summary.scalar('valid_gen_loss_b', self.gen_loss_b),
-            tf.summary.scalar('valid_cycle_loss_a', self.cycle_loss_a),
-            tf.summary.scalar('valid_cycle_loss_b', self.cycle_loss_b)
+        self.summary_train_disc_a = tf.summary.merge([
+            tf.summary.scalar('loss_disc_a', disc_loss_a),
+            tf.summary.image('buffer_a', image_form(self.__fake_img_a_buffer))
+        ])
+
+        self.summary_train_disc_b = tf.summary.merge([
+            tf.summary.scalar('loss_disc_b', disc_loss_b),
+            tf.summary.image('buffer_b', image_form(self.__fake_img_b_buffer))
         ])
 
         self.summary_image = tf.summary.merge([
-            tf.summary.image('original_A', original_img_a),
-            tf.summary.image('fake_B', (self.fake_img_b + 1)*255/2),
-            tf.summary.image('cycled_A', (cycle_img_a + 1)*255/2),
-            tf.summary.image('original_B', original_img_b),
-            tf.summary.image('fake_A', (self.fake_img_a + 1)*255/2),
-            tf.summary.image('cycled_B', (cycle_img_b + 1)*255/2)
+            tf.summary.image('original_a', self.__original_img_a, self.__log_img_size),
+            tf.summary.image('fake_b', image_form(self.fake_img_b), self.__log_img_size),
+            tf.summary.image('cycled_a', image_form(cycle_img_a), self.__log_img_size),
+            tf.summary.image('original_b', self.__original_img_b, self.__log_img_size),
+            tf.summary.image('fake_a', image_form(self.fake_img_a), self.__log_img_size),
+            tf.summary.image('cycled_b', image_form(cycle_img_b), self.__log_img_size)
         ])
 
-    def train(self,
-              epoch: int,
-              progress_interval: int = 1,
-              validation_batch: int = 1000,
-              log_image_size: int = 5):
+    def train(self, epoch: int, progress_interval: int = 1):
 
         def shuffle_data(data, seed=None):
             """shuffle array along first axis"""
@@ -261,162 +276,128 @@ class CycleGAN:
             buffer_b = meta['buffer_b']
             buffer_ind = meta['buffer_ind']
             ini_epoch = meta['epoch']
-            i_summary_train_gen = meta['i_summary_train_gen']
-            i_summary_train_disc = meta['i_summary_train_disc']
-            i_summary_valid = meta['i_summary_valid']
+            i_summary = meta['i_summary']
         else:
             learning_rate = self.__ini_learning_rate
             buffer_a = np.zeros(tuple([self.__buffer_size] + self.__image_shape))
             buffer_b = np.zeros(tuple([self.__buffer_size] + self.__image_shape))
             buffer_ind = 0
             ini_epoch = 0
-            i_summary_train_gen = 0
-            i_summary_train_disc = 0
-            i_summary_valid = 0
-
+            i_summary = 0
             # write hyperparameters to tensorboad
             sums = self.session.run(self.summary_hyperparameter)
             self.writer.add_summary(sums, 0)
 
         e = -1
         for e in range(ini_epoch, ini_epoch + epoch):
-            self.session.run([
-                self.iterator_gen_ini_a,
-                self.iterator_gen_ini_b,
-                self.iterator_disc_ini_a,
-                self.iterator_disc_ini_b],
-                feed_dict={
-                    self.__tfrecord_a: '%s/trainA.tfrecord' % self.tfrecord_dir,
-                    self.__tfrecord_b: '%s/trainB.tfrecord' % self.tfrecord_dir
-                }
-            )
+            self.session.run([self.iterator_ini_a, self.iterator_ini_b],
+                             feed_dict={
+                                 self.__tfrecord_a: '%s/trainA.tfrecord' % self.tfrecord_dir,
+                                 self.__tfrecord_b: '%s/trainB.tfrecord' % self.tfrecord_dir
+                             })
 
             n = 0
-
             learning_rate = learning_rate_scheduler(learning_rate, e)
-
-            gen_loss_a = []
-            gen_loss_b = []
-            disc_loss_a = []
-            disc_loss_b = []
-            cycle_loss_a = []
-            cycle_loss_b = []
 
             # TRAIN
             while True:
                 n += 1
                 try:
-                    # train generator
-                    returns = self.session.run([
+                    # get input image
+                    img_a, img_b = self.session.run(
+                        [self.img_a, self.img_b],
+                        feed_dict={self.__learning_rate: learning_rate})
+
+                    # train generator A
+                    summary, fake_img_a, _ = self.session.run([
+                        self.summary_train_gen_a,
                         self.fake_img_a,
+                        self.train_op_gen_a
+                    ],
+                        feed_dict={
+                            self.__learning_rate: learning_rate,
+                            self.__original_img_a: img_a,
+                            self.__original_img_b: img_b}
+                    )
+                    self.writer.add_summary(summary, i_summary)
+                    # train generator B
+                    summary, fake_img_b, _ = self.session.run([
+                        self.summary_train_gen_b,
                         self.fake_img_b,
-                        self.gen_loss_a,
-                        self.gen_loss_b,
-                        self.cycle_loss_a,
-                        self.cycle_loss_b,
-                        self.summary_train_gen,
-                        self.train_op_gen_a,
                         self.train_op_gen_b
                     ],
-                        feed_dict={self.__learning_rate: learning_rate}
+                        feed_dict={
+                            self.__learning_rate: learning_rate,
+                            self.__original_img_a: img_a,
+                            self.__original_img_b: img_b}
                     )
-                    gen_loss_a.append(returns[2])
-                    gen_loss_b.append(returns[3])
-                    cycle_loss_a.append(returns[4])
-                    cycle_loss_b.append(returns[5])
-                    self.writer.add_summary(returns[6], i_summary_train_gen)
-                    i_summary_train_gen += 1
+                    self.writer.add_summary(summary, i_summary)
 
+                    # buffering generated images
                     if buffer_ind > self.__buffer_size - 1:
                         # TODO: this works with only batch size `1`. Extend in general case
                         if np.random.rand() > 0.5:
-                            sampled_fake_a = returns[0]
-                            sampled_fake_b = returns[1]
+                            sampled_fake_a = fake_img_a
+                            sampled_fake_b = fake_img_b
                         else:
                             # sample from buffered a
                             buffer_a = shuffle_data(buffer_a)
                             sampled_fake_a = buffer_a[0:1, :, :, :]
-                            buffer_a[0, :, :, :] = returns[0][0]
+                            buffer_a[0, :, :, :] = fake_img_a[0]
                             # sample from buffered b
                             buffer_b = shuffle_data(buffer_b)
                             sampled_fake_b = buffer_b[0:1, :, :, :]
-                            buffer_b[0, :, :, :] = returns[1][0]
+                            buffer_b[0, :, :, :] = fake_img_b[0]
                     else:
-                        sampled_fake_a = returns[0]
-                        sampled_fake_b = returns[1]
+                        sampled_fake_a = fake_img_a
+                        sampled_fake_b = fake_img_b
                         buffer_a[buffer_ind, :, :, :] = sampled_fake_a
                         buffer_b[buffer_ind, :, :, :] = sampled_fake_b
                         buffer_ind += 1
 
-                    # train discriminator
-                    returns = self.session.run([
-                        self.disc_loss_a,
-                        self.disc_loss_b,
-                        self.summary_train_disc,
-                        self.train_op_disc_a,
+                    # train discriminator A
+                    summary, _ = self.session.run([
+                        self.summary_train_disc_a,
+                        self.train_op_disc_a
+                    ],
+                        feed_dict={
+                            self.__learning_rate: learning_rate,
+                            self.__original_img_a: img_a,
+                            self.__fake_img_a_buffer: sampled_fake_a}
+                    )
+                    self.writer.add_summary(summary, i_summary)
+                    # train discriminator B
+                    summary, _ = self.session.run([
+                        self.summary_train_disc_b,
                         self.train_op_disc_b
                     ],
                         feed_dict={
-                            self.__fake_img_a_buffer: sampled_fake_a,
-                            self.__fake_img_b_buffer: sampled_fake_b
-                        }
+                            self.__learning_rate: learning_rate,
+                            self.__original_img_b: img_b,
+                            self.__fake_img_b_buffer: sampled_fake_b}
                     )
-                    disc_loss_a.append(returns[0])
-                    disc_loss_b.append(returns[1])
-                    self.writer.add_summary(returns[2], i_summary_train_disc)
-                    i_summary_train_disc += 1
+                    self.writer.add_summary(summary, i_summary)
 
                     if progress_interval is not None and n % progress_interval == 0:
-                        print('epoch %i-%i: '
-                              'A [gen: %0.6f, disc: %0.3f, cyc: %0.3f] '
-                              'B [gen: %0.6f, disc: %0.3f, cyc: %0.3f]\r'
-                              % (e, n,
-                                 np.average(gen_loss_a),
-                                 np.average(disc_loss_a),
-                                 np.average(cycle_loss_a),
-                                 np.average(gen_loss_b),
-                                 np.average(disc_loss_b),
-                                 np.average(cycle_loss_b)),
-                              end='', flush=True)
+                        print('epoch %i-%i\r' % (e, n), end='', flush=True)
+
+                    i_summary += 1
 
                 except tf.errors.OutOfRangeError:
                     print()
-                    self.__log('epoch %i: '
-                               'A [gen: %0.6f, disc: %0.3f, cyc: %0.3f] '
-                               'B [gen: %0.6f, disc: %0.3f, cyc: %0.3f]'
-                               % (e,
-                                  np.average(gen_loss_a),
-                                  np.average(disc_loss_a),
-                                  np.average(cycle_loss_a),
-                                  np.average(gen_loss_b),
-                                  np.average(disc_loss_b),
-                                  np.average(cycle_loss_b)
-                                  )
-                               )
-                    break
+                    self.__log('epoch %i:' % e)
 
-            # VALID
-            self.session.run([self.iterator_gen_ini_a, self.iterator_gen_ini_b],
-                             feed_dict={
-                                 self.__tfrecord_a: '%s/testA.tfrecord' % self.tfrecord_dir,
-                                 self.__tfrecord_b: '%s/testB.tfrecord' % self.tfrecord_dir
-                             })
-
-            while True:
-                try:
-                    returns = self.session.run(self.summary_valid, feed_dict={self.__batch: validation_batch})
-                    self.writer.add_summary(returns, i_summary_valid)
-                    i_summary_valid += 1
-
-                except tf.errors.OutOfRangeError:
-                    self.session.run([self.iterator_gen_ini_a, self.iterator_gen_ini_b],
+                    # produce images from validation data
+                    self.session.run([self.iterator_ini_a, self.iterator_ini_b],
                                      feed_dict={
                                          self.__tfrecord_a: '%s/testA.tfrecord' % self.tfrecord_dir,
-                                         self.__tfrecord_b: '%s/testB.tfrecord' % self.tfrecord_dir
+                                         self.__tfrecord_b: '%s/testB.tfrecord' % self.tfrecord_dir,
+                                         self.__batch: self.__log_img_size
                                      })
-                    returns = self.session.run(self.summary_image, feed_dict={self.__batch: log_image_size})
-                    self.writer.add_summary(returns, e)
-
+                    img_a, img_b = self.session.run([self.img_a, self.img_b])
+                    summary = self.session.run(self.summary_image,
+                                               feed_dict={self.__original_img_a: img_a, self.__original_img_b: img_b})
+                    self.writer.add_summary(summary, e)
                     break
 
         self.__saver.save(self.session, self.__checkpoint)
@@ -425,9 +406,7 @@ class CycleGAN:
                  buffer_a=buffer_a,
                  buffer_b=buffer_b,
                  buffer_ind=buffer_ind,
-                 i_summary_train_gen=i_summary_train_gen,
-                 i_summary_train_disc=i_summary_train_disc,
-                 i_summary_valid=i_summary_valid,
+                 i_summary=i_summary,
                  epoch=e + 1)
 
     def __log(self, statement):

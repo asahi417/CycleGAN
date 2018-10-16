@@ -1,6 +1,14 @@
-# Cycle GAN implementation by tensorflow
+# Cycle GAN
+
+Tensorflow implementation of Cycle GAN. This repository is also aiming to be an tutorial of using TFRecord and tensorboard (scalar, image, histogram, etc).
 
 ## Setup
+Clone repository
+```
+git clone https://github.com/asahi417/CycleGAN
+cd CycleGAN
+pip install .
+```
 
 **setup dataset** 
 

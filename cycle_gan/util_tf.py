@@ -6,55 +6,66 @@ from tensorflow.python.ops import array_ops
 def discriminator_patch(input_image,
                         leaky_relu_alpha: float = 0.2,
                         reuse: bool = None,
-                        scope: str = None):
+                        scope: str = None,
+                        dim: int = 64,
+                        ks: int = 4):
 
     """ Discriminator (Patch GAN)
+    Input 256 x 256 x 3 images and get 32 x 32 x 1 output, which supposed to be logit to be classified by
+    discriminator. This can be seen as 32 x 32 patch GAN since the discriminator would try to classify
+    piece of image (32 x 32 x 1) instead of entire image.
 
+     Architecture
+    --------------
+    1. conv (stride: 2, filter: dim, kernel: ks)
+    2. conv (stride: 2, filter: dim * 2, kernel: ks)
+    3. conv (stride: 2, filter: dim * 4, kernel: ks)
+    4. conv (stride: 1, filter: dim * 8, kernel: ks)
+    5. conv (stride: 1, filter: 1, kernel: ks)
+
+
+     Parameter
+    ------------
     :param input_image: tensor (batch, 256, 256, 3)
     :param leaky_relu_alpha:
     :param reuse:
     :param scope:
-    :return:
+    :param dim: base filter size
+    :param ks: kernel size
+
+     Return
+    --------------
+    :return: logit (batch, 32, 32, 1)
     """
 
     def leaky_relu(x):
         return tf.maximum(tf.minimum(0.0, leaky_relu_alpha * x), x)
 
-    dim = 64
-    with tf.variable_scope(scope or "patch_discriminator", reuse=reuse):
-        f = 4
-        patch_input = tf.random_crop(input_image, [1, 70, 70, 3])
+    with tf.variable_scope(scope or "patch_gan_discriminator", reuse=reuse):
 
         with tf.variable_scope("conv_1"):
-            layer = convolution(patch_input, weight_shape=[f, f, 3, dim], stride=[2, 2])
+            layer = convolution(input_image, weight_shape=[ks, ks, 3, dim], stride=[2, 2])
             layer = leaky_relu(layer)
 
         with tf.variable_scope("conv_2"):
-            # print(layer.shape)
-            layer = convolution(layer, weight_shape=[f, f, dim, dim * 2], stride=[2, 2])
+            layer = convolution(layer, weight_shape=[ks, ks, dim, dim * 2], stride=[2, 2])
             layer = instance_norm(layer)
             layer = leaky_relu(layer)
 
         with tf.variable_scope("conv_3"):
-            # print(layer.shape)
-            layer = convolution(layer, weight_shape=[f, f, dim * 2, dim * 4], stride=[2, 2])
+            layer = convolution(layer, weight_shape=[ks, ks, dim * 2, dim * 4], stride=[2, 2])
             layer = instance_norm(layer)
             layer = leaky_relu(layer)
 
         with tf.variable_scope("conv_4"):
-            # print(layer.shape)
-            layer = convolution(layer, weight_shape=[f, f, dim * 4, dim * 8], stride=[2, 2])
+            layer = convolution(layer, weight_shape=[ks, ks, dim * 4, dim * 8], stride=[1, 1])
             layer = instance_norm(layer)
             layer = leaky_relu(layer)
 
         with tf.variable_scope("conv_5"):
-            # print(layer.shape)
-            layer = convolution(layer, weight_shape=[f, f, dim * 8, 2], stride=[5, 5])
-            # print(layer.shape)
+            layer = convolution(layer, weight_shape=[ks, ks, dim * 8, 1], stride=[1, 1])
 
-        logit = layer[:, 0, 0, :]
-        # print(logit.shape)
-    return logit
+    return layer
 
 
 def generator_resnet(input_image,
@@ -69,7 +80,6 @@ def generator_resnet(input_image,
     """
 
     batch_size = dynamic_batch_size(input_image)
-    # width = input_image.get_shape()[1]
     f_ks = 7  # first conv's kernel size
     ks = 3  # kernel size
     dim = 32  # output ch
@@ -167,6 +177,8 @@ def instance_norm(inputs,
                   epsilon=1e-5,
                   scope=None,
                   reuse=None):
+
+    """Instance Normarization"""
 
     with tf.variable_scope(scope or "instance_norm", reuse=reuse):
         mean, var = tf.nn.moments(inputs, [1, 2], keep_dims=True)
