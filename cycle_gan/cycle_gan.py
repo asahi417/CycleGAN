@@ -114,18 +114,20 @@ class CycleGAN:
         with tf.name_scope('generators'):
             # generator from A to B
             self.fake_img_b = generator_resnet(original_img_a_norm, scope='generator_a')
-            cycle_img_a = generator_resnet(self.fake_img_b, scope='generator_b')
+            self.cycle_img_a = generator_resnet(self.fake_img_b, scope='generator_b')
 
             # generator from B to A
             self.fake_img_a = generator_resnet(original_img_b_norm, scope='generator_b', reuse=True)
-            cycle_img_b = generator_resnet(self.fake_img_a, scope='generator_a', reuse=True)
+            self.cycle_img_b = generator_resnet(self.fake_img_a, scope='generator_a', reuse=True)
 
+            self.id_a = generator_resnet(original_img_a_norm, scope='generator_b', reuse=True)
+            self.id_b = generator_resnet(original_img_b_norm, scope='generator_a', reuse=True)
             if self.__identity_lambda != 0.0:
-                id_a = generator_resnet(original_img_a_norm, scope='generator_b', reuse=True)
-                id_loss_a = tf.reduce_mean(tf.abs(original_img_a_norm - id_a))
+                # self.id_a = generator_resnet(original_img_a_norm, scope='generator_b', reuse=True)
+                id_loss_a = tf.reduce_mean(tf.abs(original_img_a_norm - self.id_a))
 
-                id_b = generator_resnet(original_img_b_norm, scope='generator_a', reuse=True)
-                id_loss_b = tf.reduce_mean(tf.abs(original_img_b_norm - id_b))
+                # self.id_b = generator_resnet(original_img_b_norm, scope='generator_a', reuse=True)
+                id_loss_b = tf.reduce_mean(tf.abs(original_img_b_norm - self.id_b))
             else:
                 id_loss_a = id_loss_b = 0.0
 
@@ -158,8 +160,8 @@ class CycleGAN:
             disc_loss_b = (tf.reduce_mean(tf.squared_difference(logit_fake_b, 0)) +
                            tf.reduce_mean(tf.squared_difference(logit_original_b, 1))) * 0.5
             # cycle consistency loss
-            cycle_loss_a = tf.reduce_mean(tf.abs(original_img_a_norm - cycle_img_a))
-            cycle_loss_b = tf.reduce_mean(tf.abs(original_img_b_norm - cycle_img_b))
+            cycle_loss_a = tf.reduce_mean(tf.abs(original_img_a_norm - self.cycle_img_a))
+            cycle_loss_b = tf.reduce_mean(tf.abs(original_img_b_norm - self.cycle_img_b))
 
         ################
         # optimization #
@@ -247,10 +249,10 @@ class CycleGAN:
         self.summary_image = tf.summary.merge([
             tf.summary.image('original_a', self.__original_img_a, self.__log_img_size),
             tf.summary.image('fake_b', image_form(self.fake_img_b), self.__log_img_size),
-            tf.summary.image('cycled_a', image_form(cycle_img_a), self.__log_img_size),
+            tf.summary.image('cycled_a', image_form(self.cycle_img_a), self.__log_img_size),
             tf.summary.image('original_b', self.__original_img_b, self.__log_img_size),
             tf.summary.image('fake_a', image_form(self.fake_img_a), self.__log_img_size),
-            tf.summary.image('cycled_b', image_form(cycle_img_b), self.__log_img_size)
+            tf.summary.image('cycled_b', image_form(self.cycle_img_b), self.__log_img_size)
         ])
 
     def train(self, epoch: int, progress_interval: int = 1):
@@ -408,6 +410,40 @@ class CycleGAN:
                  buffer_ind=buffer_ind,
                  i_summary=i_summary,
                  epoch=e + 1)
+
+    def generate_img(self, batch):
+        """ Return generated img
+
+        :param batch: number of img
+        :return: 0~255, uint, numpy array
+        [original_a, fake_from_a, cycle_a, identity_a, original_b, fake_from_b, cycle_b, identity_b]
+        """
+
+        def form_img(target_array):
+            target_array = (target_array+1)/2*255
+            target_array = target_array.astype(np.uint8)
+            return target_array
+
+        self.session.run([self.iterator_ini_a, self.iterator_ini_b],
+                         feed_dict={
+                             self.__tfrecord_a: '%s/testA.tfrecord' % self.tfrecord_dir,
+                             self.__tfrecord_b: '%s/testB.tfrecord' % self.tfrecord_dir,
+                             self.__batch: 1
+                         })
+        result = []
+        for b in range(batch):
+            img_a, img_b = self.session.run([self.img_a, self.img_b])
+            imgs = self.session.run([
+                self.fake_img_b, self.cycle_img_a, self.id_a,
+                self.fake_img_a, self.cycle_img_b, self.id_b
+            ],
+                feed_dict={self.__original_img_a: img_a, self.__original_img_b: img_b}
+            )
+            result.append([
+                img_a.astype(np.uint8), form_img(imgs[0]), form_img(imgs[1]), form_img(imgs[2]),
+                img_b.astype(np.uint8), form_img(imgs[3]), form_img(imgs[4]), form_img(imgs[5])
+            ])
+        return result
 
     def __log(self, statement):
         if self.__logger is not None:

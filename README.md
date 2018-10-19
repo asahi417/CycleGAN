@@ -2,7 +2,7 @@
 [![dep1](https://img.shields.io/badge/Tensorflow-1.3+-blue.svg)](https://www.tensorflow.org/)
 [![license](https://img.shields.io/badge/License-MIT-brightgreen.svg)](https://github.com/asahi417/WassersteinGAN/blob/master/LICENSE)
 
-Tensorflow implementation of Cycle GAN.
+Tensorflow implementation of [Cycle GAN](https://arxiv.org/pdf/1703.10593.pdf).
 - Dataset are converted to TFRecord format
 - Tensorboard visualization (metrics, output generated image)
 
@@ -42,5 +42,21 @@ You can tune hyperparameter by modifying [this file](./bin/hyperparameter.toml).
 tensorboard logdir=./checkpoint --port 555
 ```
 
+## Result
+Here, some generated examples are shown with different identity map regularizer (lambda_id in the paper).
 
+<p align="center">
+  <img src="./bin/img/generated_img/horse2zebra-v2.jpg" width="900">
+  <br><i>Fig 1: Horse <-> zebra with 0.0 identity regularizer (Original -> Generated -> Cycled -> Identity) </i>
+</p>
+
+<p align="center">
+  <img src="./bin/img/generated_img/horse2zebra-v0.jpg" width="900">
+  <br><i>Fig 1: Horse <-> zebra with 0.1 identity regularizer (Original -> Generated -> Cycled -> Identity) </i>
+</p>
+
+<p align="center">
+  <img src="./bin/img/generated_img/horse2zebra-v1.jpg" width="900">
+  <br><i>Fig 2: Horse <-> zebra with 0.5 identity regularizer (Original -> Generated -> Cycled -> Identity) </i>
+</p>
 
