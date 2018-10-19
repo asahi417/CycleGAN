@@ -14,7 +14,7 @@ cd CycleGAN
 pip install .
 ```
 
-**setup dataset** 
+### setup dataset 
 
 ```bash
 mkdir datasets
@@ -22,7 +22,7 @@ bash bin/download_cyclegan_dataset.sh monet2photo
 ```
 You can choose dataset from following list: monet2photo, horse2zebra, vangogh2photo, ukiyoe2photo, cezanne2photo
 
-***convert dataset to TFRecord format***
+### convert dataset to TFRecord format
 
 ```bash
 python bin/build_tfrecord.py --data monet2photo 
@@ -36,7 +36,7 @@ python bin/train.py --data monet2photo -e 200
 
 You can tune hyperparameter by modifying [this file](./bin/hyperparameter.toml).
 
-***visualize by tensorboard***
+### visualize by tensorboard
 
 ```bash
 tensorboard logdir=./checkpoint --port 555
@@ -44,19 +44,21 @@ tensorboard logdir=./checkpoint --port 555
 
 ## Result
 Here, some generated examples are shown with different identity map regularizer (lambda_id in the paper).
-
+### with 0.0 identity regularizer
 <p align="center">
-  <img src="./bin/img/generated_img/horse2zebra-v2.jpg" width="900">
-  <br><i>Fig 1: Horse <-> zebra with 0.0 identity regularizer (Original -> Generated -> Cycled -> Identity) </i>
+  <img src="./bin/img/generated_img/horse2zebra-v2.jpg" width="700">
+  <br><i>Fig 1: Horse <-> zebra (Original -> Generated -> Cycled -> Identity) </i>
 </p>
 
+### with 0.1 identity regularizer
 <p align="center">
-  <img src="./bin/img/generated_img/horse2zebra-v0.jpg" width="900">
-  <br><i>Fig 1: Horse <-> zebra with 0.1 identity regularizer (Original -> Generated -> Cycled -> Identity) </i>
+  <img src="./bin/img/generated_img/horse2zebra-v0.jpg" width="700">
+  <br><i>Fig 1: Horse <-> zebra (Original -> Generated -> Cycled -> Identity) </i>
 </p>
 
+### with 0.5 identity regularizer
 <p align="center">
-  <img src="./bin/img/generated_img/horse2zebra-v1.jpg" width="900">
-  <br><i>Fig 2: Horse <-> zebra with 0.5 identity regularizer (Original -> Generated -> Cycled -> Identity) </i>
+  <img src="./bin/img/generated_img/horse2zebra-v1.jpg" width="700">
+  <br><i>Fig 2: Horse <-> zebra (Original -> Generated -> Cycled -> Identity) </i>
 </p>
 
