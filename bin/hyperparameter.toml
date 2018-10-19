@@ -1,7 +1,7 @@
 image_shape=[256, 256, 3]
 cyclic_lambda_a=10
 cyclic_lambda_b=10
-identity_lambda=0.0
+identity_lambda=0.1
 learning_rate=0.0002
 buffer_size=50
 optimizer='adam'
