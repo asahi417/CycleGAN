@@ -28,7 +28,7 @@ You can choose dataset from following list: monet2photo, horse2zebra, vangogh2ph
 python bin/build_tfrecord.py --data monet2photo 
 ```
 
-***train cycle GAN***
+### train cycle GAN
 
 ```bash
 python bin/train.py --data monet2photo -e 200
