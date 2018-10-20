@@ -50,15 +50,20 @@ Here, some generated examples are shown with different identity map regularizer 
   <br><i>Fig 1: Horse <-> zebra ([Original, Generated, Cycled, Identity]) </i>
 </p>
 
+<p align="center">
+  <img src="./bin/img/generated_img/monet2photo-v0.jpg" width="700">
+  <br><i>Fig 2: Monet <-> photo ([Original, Generated, Cycled, Identity]) </i>
+</p>
+
 ### with 0.1 identity regularizer
 <p align="center">
   <img src="./bin/img/generated_img/horse2zebra-v0.jpg" width="700">
-  <br><i>Fig 1: Horse <-> zebra ([Original, Generated, Cycled, Identity]) </i>
+  <br><i>Fig 3: Horse <-> zebra ([Original, Generated, Cycled, Identity]) </i>
 </p>
 
 ### with 0.5 identity regularizer
 <p align="center">
   <img src="./bin/img/generated_img/horse2zebra-v1.jpg" width="700">
-  <br><i>Fig 2: Horse <-> zebra ([Original, Generated, Cycled, Identity]) </i>
+  <br><i>Fig 5: Horse <-> zebra ([Original, Generated, Cycled, Identity]) </i>
 </p>
 
