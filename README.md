@@ -61,6 +61,11 @@ Here, some generated examples are shown with different identity map regularizer 
   <br><i>Fig 3: Horse <-> zebra ([Original, Generated, Cycled, Identity]) </i>
 </p>
 
+<p align="center">
+  <img src="./bin/img/generated_img/monet2photo-v1.jpg" width="700">
+  <br><i>Fig 4: Monet <-> photo ([Original, Generated, Cycled, Identity]) </i>
+</p>
+
 ### with 0.5 identity regularizer
 <p align="center">
   <img src="./bin/img/generated_img/horse2zebra-v1.jpg" width="700">
