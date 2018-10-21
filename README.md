@@ -72,3 +72,7 @@ Here, some generated examples are shown with different identity map regularizer 
   <br><i>Fig 5: Horse <-> zebra ([Original, Generated, Cycled, Identity]) </i>
 </p>
 
+<p align="center">
+  <img src="./bin/img/generated_img/monet2photo-v2.jpg" width="700">
+  <br><i>Fig 6: Monet <-> photo ([Original, Generated, Cycled, Identity]) </i>
+</p>
